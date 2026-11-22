@@ -431,16 +431,40 @@ ${SESSION_COMMAND_LOOP}
 }
 
 /**
- * {"kind":"reset"} -> every global added since bootstrap is deleted and every
- * bootstrap global a script replaced or removed is put back.
+ * {"kind":"reset"} -> every timer a script left running is cleared, every global
+ * added since bootstrap is deleted and every bootstrap global a script replaced
+ * or removed is put back.
  * The reflection helpers are bound up front so a script overwriting them can't break this.
  */
 const SESSION_GLOBALS_RESET = `
 const ownKeysOf = Reflect.ownKeys;
 const descriptorOf = Object.getOwnPropertyDescriptor;
 const defineOn = Object.defineProperty;
+const liveTimers = new Set();
+const nativeSetTimeout = globalThis.setTimeout;
+const nativeSetInterval = globalThis.setInterval;
+const nativeClearTimeout = globalThis.clearTimeout;
+const nativeClearInterval = globalThis.clearInterval;
+globalThis.setTimeout = (handler, delay, ...args) => {
+    const id = nativeSetTimeout((...handlerArgs) => {
+        liveTimers.delete(id);
+        handler(...handlerArgs);
+    }, delay, ...args);
+    liveTimers.add(id);
+    return id;
+};
+globalThis.setInterval = (...args) => {
+    const id = nativeSetInterval(...args);
+    liveTimers.add(id);
+    return id;
+};
 const baselineGlobals = new Map(ownKeysOf(globalThis).map((key) => [key, descriptorOf(globalThis, key)]));
 const resetGlobals = () => {
+    for (const id of liveTimers) {
+        nativeClearTimeout(id);
+        nativeClearInterval(id);
+    }
+    liveTimers.clear();
     for (const key of ownKeysOf(globalThis)) {
         if (!baselineGlobals.has(key)) {
             delete globalThis[key];

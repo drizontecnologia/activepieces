@@ -582,6 +582,21 @@ describe('denoCodeSandbox permission boundary', () => {
             }
         })
 
+        it('reset stops timers a script left running', async () => {
+            const session = await denoCodeSandbox.createScriptSession({ scriptContext: {}, functions: {} })
+            try {
+                await session.run('(setInterval(() => { globalThis.ticks = (globalThis.ticks ?? 0) + 1 }, 1), 1)')
+                expect(await session.run('new Promise((resolve) => setTimeout(() => resolve(typeof ticks), 30))')).toBe('number')
+
+                await session.reset()
+
+                expect(await session.run('new Promise((resolve) => setTimeout(() => resolve(typeof ticks), 30))')).toBe('undefined')
+            }
+            finally {
+                session.dispose()
+            }
+        })
+
         it('rejects runs after dispose', async () => {
             const session = await denoCodeSandbox.createScriptSession({
                 scriptContext: {},
