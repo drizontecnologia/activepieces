@@ -3,7 +3,7 @@ import { realpath } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { deno, DenoPermission, DenoSession, isNil } from '@activepieces/core-utils'
+import { deno, DenoPermission, DenoSession, isNil, tryCatch } from '@activepieces/core-utils'
 import { ExecutionMode } from '@activepieces/shared'
 import { CodeSandbox } from './code-sandbox-common'
 
@@ -84,7 +84,8 @@ export function denoCodeSandbox({ permissions, codeStepMemoryLimitMb }: DenoCode
         },
 
         async createScriptSession({ scriptContext, functions, flowVersionDir }) {
-            const context: Record<string, unknown> = { ...scriptContext }
+            let context: Record<string, unknown> = { ...scriptContext }
+            let touchedSinceReset = false
             const bootstrapBody = Object.entries(functions).map(([key, value]) => `globalThis[${JSON.stringify(key)}] = ${value.toString()};`).join('\n')
             const sessionDenoDir = isNil(flowVersionDir) || !existsSync(flowVersionDir) ? undefined : resolveWarmDenoDir(flowVersionDir)
             let current: LiveScriptSession | null = null
@@ -140,6 +141,7 @@ export function denoCodeSandbox({ permissions, codeStepMemoryLimitMb }: DenoCode
                     if (disposed) {
                         throw new Error('Script session has been disposed')
                     }
+                    touchedSinceReset = true
                     const live = await ensureLive()
                     await syncGlobals(live)
                     return live.session.run({ script })
@@ -149,6 +151,19 @@ export function denoCodeSandbox({ permissions, codeStepMemoryLimitMb }: DenoCode
                         return
                     }
                     context[key] = value
+                },
+                reset: async () => {
+                    context = { ...scriptContext }
+                    if (!touchedSinceReset) {
+                        return
+                    }
+                    touchedSinceReset = false
+                    const live = current
+                    if (live === null || !live.session.isAlive()) {
+                        return
+                    }
+                    live.sentGlobals.clear()
+                    await tryCatch(() => live.session.reset())
                 },
                 dispose: () => {
                     disposed = true

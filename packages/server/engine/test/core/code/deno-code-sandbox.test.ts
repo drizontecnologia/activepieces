@@ -557,6 +557,31 @@ describe('denoCodeSandbox permission boundary', () => {
             }
         })
 
+        it('reset drops step views and script-made globals, and restores injected functions and built-ins', async () => {
+            const session = await denoCodeSandbox.createScriptSession({
+                scriptContext: {},
+                functions: { double: (n: number) => n * 2 },
+            })
+            try {
+                await session.setGlobal('step_1', { out: 5 })
+                expect(await session.run('step_1.out')).toBe(5)
+                await session.run('(globalThis.leaked = 1, globalThis.double = () => 0, globalThis.Math = null, 1)')
+
+                await session.reset()
+
+                expect(await session.run('typeof step_1')).toBe('undefined')
+                expect(await session.run('typeof leaked')).toBe('undefined')
+                expect(await session.run('double(2)')).toBe(4)
+                expect(await session.run('Math.max(1, 2)')).toBe(2)
+
+                await session.setGlobal('step_1', { out: 7 })
+                expect(await session.run('step_1.out')).toBe(7)
+            }
+            finally {
+                session.dispose()
+            }
+        })
+
         it('rejects runs after dispose', async () => {
             const session = await denoCodeSandbox.createScriptSession({
                 scriptContext: {},

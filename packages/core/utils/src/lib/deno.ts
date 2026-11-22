@@ -252,6 +252,9 @@ export const deno = {
             run: ({ script }: SessionRunParams): Promise<unknown> => {
                 return send({ kind: 'run', script })
             },
+            reset: async (): Promise<void> => {
+                await send({ kind: 'reset' })
+            },
             isAlive: (): boolean => alive,
             dispose: (): void => {
                 alive = false
@@ -419,12 +422,43 @@ function buildSessionProgram({ bootstrapBody, tmpDir }: { bootstrapBody: string,
     return `
 ${sandboxError.payloadSourceFor({ tmpDir })}
 ${bootstrapBody}
+${SESSION_GLOBALS_RESET}
 ${SESSION_REPLY_CHANNEL()}
 ${SESSION_REJECTION_TRACKING}
 ${SESSION_SCRIPT_RUNNER}
 ${SESSION_COMMAND_LOOP}
 `
 }
+
+/**
+ * {"kind":"reset"} -> every global added since bootstrap is deleted and every
+ * bootstrap global a script replaced or removed is put back.
+ * The reflection helpers are bound up front so a script overwriting them can't break this.
+ */
+const SESSION_GLOBALS_RESET = `
+const ownKeysOf = Reflect.ownKeys;
+const descriptorOf = Object.getOwnPropertyDescriptor;
+const defineOn = Object.defineProperty;
+const baselineGlobals = new Map(ownKeysOf(globalThis).map((key) => [key, descriptorOf(globalThis, key)]));
+const resetGlobals = () => {
+    for (const key of ownKeysOf(globalThis)) {
+        if (!baselineGlobals.has(key)) {
+            delete globalThis[key];
+        }
+    }
+    for (const [key, descriptor] of baselineGlobals) {
+        const current = descriptorOf(globalThis, key);
+        const unchanged = current !== undefined && current.value === descriptor.value && current.get === descriptor.get && current.set === descriptor.set;
+        if (unchanged) {
+            continue;
+        }
+        try {
+            defineOn(globalThis, key, descriptor);
+        }
+        catch {
+        }
+    }
+};`
 
 /**
  * MARKER{"id":"0","success":true,"result":42}  -> protocol reply
@@ -503,6 +537,11 @@ for await (const chunk of Deno.stdin.readable) {
             reply({ id: command.id, success: true, result: null });
             continue;
         }
+        if (command.kind === 'reset') {
+            resetGlobals();
+            reply({ id: command.id, success: true, result: null });
+            continue;
+        }
         try {
             const result = await runScript(command.script);
             reply({ id: command.id, success: true, result: result ?? null });
@@ -569,6 +608,7 @@ type DenoProgramParams = {
 export type DenoSession = {
     setGlobal(params: SessionSetGlobalParams): Promise<void>
     run(params: SessionRunParams): Promise<unknown>
+    reset(): Promise<void>
     isAlive(): boolean
     dispose(): void
 }
@@ -595,6 +635,7 @@ type SessionRunParams = {
 type SessionCommandBody =
     | { kind: 'set', key: string, value: unknown }
     | { kind: 'run', script: string }
+    | { kind: 'reset' }
 
 type SessionReply =
     | { id: string, success: true, result: unknown }
